@@ -19,6 +19,7 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.View
 import dev.multix.tvhome.core.Bg
+import dev.multix.tvhome.core.FontDef
 import dev.multix.tvhome.core.Fonts
 import dev.multix.tvhome.core.Images
 import dev.multix.tvhome.core.Lang
@@ -83,8 +84,7 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
         val field: Bitmap,
         val light: Int,
         val p: FloatArray,
-        val latin: Typeface,
-        val arabic: Typeface,
+        val faces: Map<Script, Typeface>,
         val cover: Bitmap?,
         /** Darkening filters for the field: index 0 is the base, the last is 6 % brighter. */
         val filters: Array<LightingColorFilter>,
@@ -289,14 +289,9 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
         val art = if (Prefs.ambientBg == "wall") wallpaper ?: t.art else t.art
         val ctx = context
         val pairing = Math.floorMod(seed ushr 7, 3)
-        val latin = when (pairing) {
-            1 -> Fonts.of(ctx, Fonts.clock.first { it.id == "dm_serif" }, W.REGULAR)
-            2 -> Fonts.of(ctx, Fonts.clock.first { it.id == "space" }, W.MEDIUM)
-            else -> Fonts.of(ctx, Fonts.INTER, W.SEMIBOLD)
-        }
-        val arabic = when (pairing) {
-            1 -> Fonts.of(ctx, Fonts.uiAr.first { it.id == "readex" }, W.MEDIUM)
-            else -> Fonts.of(ctx, Fonts.PLEX, if (pairing == 2) W.MEDIUM else W.SEMIBOLD)
+        val faces = FACES.mapValues { (_, list) ->
+            val (def, weight) = list[pairing % list.size]
+            Fonts.of(ctx, def, weight)
         }
         val vibrant = t.vibrant
         val cover = t.art
@@ -335,7 +330,7 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
                 val v = (255 * min(1f, baseMul * (1f + 0.06f * k / 7f))).toInt().coerceIn(0, 255)
                 LightingColorFilter((0xFF shl 24) or (v shl 16) or (v shl 8) or v, 0)
             }
-            Sig(seed, motif, field, light, p, latin, arabic, big, filters)
+            Sig(seed, motif, field, light, p, faces, big, filters)
         }) { s ->
             signing = false
             if (track !== t) return@load
@@ -413,7 +408,7 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
     private fun build(text: String, s: Sig, size: Float, maxW: Int, withShadow: Boolean, wordOffsets: IntArray?): LineTex {
         val rtl = isRtl(text)
         val p = TextPaint(Paint.ANTI_ALIAS_FLAG)
-        p.typeface = if (rtl || hasArabic(text)) s.arabic else s.latin
+        p.typeface = scriptOf(text)?.let { s.faces[it] } ?: Typeface.DEFAULT
         p.textSize = size
         var width = p.measureText(text)
         if (width > maxW) {
@@ -480,6 +475,55 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
     }
 
     private fun hasArabic(s: String): Boolean = s.any { it.code in 0x0600..0x06FF }
+
+    /**
+     * Vietnamese-only letters the paired display faces do not reliably carry:
+     * Ă/ă, Đ/đ, Ơ/ơ, Ư/ư and the precomposed tone-marked vowels.
+     */
+    private fun hasVietnamese(s: String): Boolean = s.any {
+        val c = it.code
+        c in 0x0102..0x0103 || c in 0x0110..0x0111 || c in 0x01A0..0x01A1 ||
+            c in 0x01AF..0x01B0 || c in 0x1EA0..0x1EF9
+    }
+
+    /**
+     * CJK ideographs, kana, hangul and their punctuation, which no bundled
+     * face covers.
+     */
+    private fun hasCjk(s: String): Boolean = s.any {
+        val c = it.code
+        c in 0x1100..0x11FF ||   // Hangul Jamo
+            c in 0x2E80..0x2EFF ||   // CJK Radicals Supplement
+            c in 0x3000..0x303F ||   // CJK punctuation
+            c in 0x3040..0x30FF ||   // Hiragana + Katakana
+            c in 0x3100..0x312F ||   // Bopomofo
+            c in 0x3130..0x318F ||   // Hangul Compatibility Jamo
+            c in 0x3400..0x4DBF ||   // CJK Unified Ideographs Extension A
+            c in 0x4E00..0x9FFF ||   // CJK Unified Ideographs
+            c in 0xAC00..0xD7AF ||   // Hangul Syllables
+            c in 0xF900..0xFAFF      // CJK Compatibility Ideographs
+    }
+
+    /** True when every character is Latin script or script-neutral (digits, punctuation, marks). */
+    private fun isLatin(s: String): Boolean = s.all {
+        when (Character.UnicodeScript.of(it.code)) {
+            Character.UnicodeScript.LATIN, Character.UnicodeScript.COMMON, Character.UnicodeScript.INHERITED -> true
+            else -> false
+        }
+    }
+
+    /**
+     * Maps a lyric line to the script whose face list should draw it, or null
+     * for a script none of the curated lists cover; the caller then uses the
+     * system face.
+     */
+    private fun scriptOf(text: String): Script? = when {
+        hasVietnamese(text) -> Script.VIETNAMESE
+        hasCjk(text) -> Script.CJK
+        isRtl(text) || hasArabic(text) -> Script.ARABIC
+        isLatin(text) -> Script.LATIN
+        else -> null
+    }
 
     // Frame
 
@@ -819,6 +863,35 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
     }
 
     companion object {
+        /** A lyric script we draw with a curated list of faces, picked by the song's hash. */
+        enum class Script { LATIN, ARABIC, VIETNAMESE, CJK }
+
+        /**
+         * The supported faces per script, in the order the song's hash cycles
+         * through them. LATIN is the original three-way pairing; the others
+         * only list faces whose glyphs actually cover that script. A line that
+         * matches none of these falls back to the system face.
+         */
+        private val FACES: Map<Script, List<Pair<FontDef, W>>> = mapOf(
+            Script.LATIN to listOf(
+                Fonts.INTER to W.SEMIBOLD,
+                Fonts.clock.first { it.id == "dm_serif" } to W.REGULAR,
+                Fonts.clock.first { it.id == "space" } to W.MEDIUM,
+            ),
+            Script.ARABIC to listOf(
+                Fonts.PLEX to W.SEMIBOLD,
+                Fonts.uiAr.first { it.id == "readex" } to W.MEDIUM,
+                Fonts.PLEX to W.MEDIUM,
+            ),
+            Script.VIETNAMESE to listOf(
+                Fonts.clock.first { it.id == "playfair" } to W.REGULAR,
+                Fonts.uiAr.first { it.id == "readex" } to W.MEDIUM,
+            ),
+            Script.CJK to listOf(
+                Fonts.SYSTEM to W.REGULAR,
+            ),
+        )
+
         /** Render the background into a small GPU layer (see onDraw). Off until measured on the box. */
         private const val LAYERED_BACKGROUND = false
         private const val TABLE = 2048

@@ -63,6 +63,8 @@ class FontDef(
     val minWeight: Int = 100,
     val maxWeight: Int = 900,
     val arabic: Boolean = false,
+    /** The platform's default face, for scripts no bundled font covers. */
+    val system: Boolean = false,
 )
 
 object Fonts {
@@ -77,6 +79,8 @@ object Fonts {
 
     val INTER = FontDef("inter", "Inter", res = inter)
     val PLEX = FontDef("plex", "IBM Plex Sans Arabic", res = plex, arabic = true)
+    /** The platform default, for scripts none of the bundled fonts cover (CJK). */
+    val SYSTEM = FontDef("system", "System default", system = true)
     private val OUTFIT = FontDef("outfit", "Outfit", "fonts/outfit.ttf", clockWeight = 200)
     private val SPACE = FontDef("space", "Space Grotesk", "fonts/space_grotesk.ttf", clockWeight = 300, minWeight = 300, maxWeight = 700)
     private val READEX = FontDef("readex", "Readex Pro", "fonts/readex_pro.ttf", clockWeight = 200, minWeight = 160, maxWeight = 700, arabic = true)
@@ -137,6 +141,7 @@ object Fonts {
     fun of(ctx: Context, d: FontDef, w: W): Typeface = load(ctx, d, w, w.wght)
 
     private fun load(ctx: Context, d: FontDef, w: W, weight: Int): Typeface {
+        if (d.system) return Typeface.DEFAULT
         val wt = weight.coerceIn(d.minWeight, d.maxWeight)
         val key = "${d.id}:${if (d.asset != null) wt.toString() else w.name}"
         cache[key]?.let { return it }
