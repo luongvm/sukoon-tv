@@ -85,6 +85,7 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
         val light: Int,
         val p: FloatArray,
         val faces: Map<Script, Typeface>,
+        val fallback: Typeface,
         val cover: Bitmap?,
         /** Darkening filters for the field: index 0 is the base, the last is 6 % brighter. */
         val filters: Array<LightingColorFilter>,
@@ -289,10 +290,12 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
         val art = if (Prefs.ambientBg == "wall") wallpaper ?: t.art else t.art
         val ctx = context
         val pairing = Math.floorMod(seed ushr 7, 3)
-        val faces = FACES.mapValues { (_, list) ->
+        val faces = FACES.filterValues { it.isNotEmpty() }.mapValues { (_, list) ->
             val (def, weight) = list[pairing % list.size]
             Fonts.of(ctx, def, weight)
         }
+        val (fallbackDef, fallbackWeight) = FALLBACK[pairing % FALLBACK.size]
+        val fallback = Fonts.of(ctx, fallbackDef, fallbackWeight)
         val vibrant = t.vibrant
         val cover = t.art
         signing = true
@@ -330,7 +333,7 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
                 val v = (255 * min(1f, baseMul * (1f + 0.06f * k / 7f))).toInt().coerceIn(0, 255)
                 LightingColorFilter((0xFF shl 24) or (v shl 16) or (v shl 8) or v, 0)
             }
-            Sig(seed, motif, field, light, p, faces, big, filters)
+            Sig(seed, motif, field, light, p, faces, fallback, big, filters)
         }) { s ->
             signing = false
             if (track !== t) return@load
@@ -408,7 +411,8 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
     private fun build(text: String, s: Sig, size: Float, maxW: Int, withShadow: Boolean, wordOffsets: IntArray?): LineTex {
         val rtl = isRtl(text)
         val p = TextPaint(Paint.ANTI_ALIAS_FLAG)
-        p.typeface = scriptOf(text)?.let { s.faces[it] } ?: Typeface.DEFAULT
+        val script = scriptOf(text)
+        p.typeface = (if (script != null) s.faces[script] else s.fallback) ?: Typeface.DEFAULT
         p.textSize = size
         var width = p.measureText(text)
         if (width > maxW) {
@@ -504,24 +508,14 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
             c in 0xF900..0xFAFF      // CJK Compatibility Ideographs
     }
 
-    /** True when every character is Latin script or script-neutral (digits, punctuation, marks). */
-    private fun isLatin(s: String): Boolean = s.all {
-        when (Character.UnicodeScript.of(it.code)) {
-            Character.UnicodeScript.LATIN, Character.UnicodeScript.COMMON, Character.UnicodeScript.INHERITED -> true
-            else -> false
-        }
-    }
-
     /**
      * Maps a lyric line to the script whose face list should draw it, or null
-     * for a script none of the curated lists cover; the caller then uses the
-     * system face.
+     * for a script we don't map; the caller then uses the fallback list.
      */
     private fun scriptOf(text: String): Script? = when {
         hasVietnamese(text) -> Script.VIETNAMESE
         hasCjk(text) -> Script.CJK
         isRtl(text) || hasArabic(text) -> Script.ARABIC
-        isLatin(text) -> Script.LATIN
         else -> null
     }
 
@@ -863,21 +857,16 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
     }
 
     companion object {
-        /** A lyric script we draw with a curated list of faces, picked by the song's hash. */
-        enum class Script { LATIN, ARABIC, VIETNAMESE, CJK }
+        /** A lyric script we detect and draw with a curated list of faces. */
+        enum class Script { ARABIC, VIETNAMESE, CJK }
 
         /**
-         * The supported faces per script, in the order the song's hash cycles
-         * through them. LATIN is the original three-way pairing; the others
-         * only list faces whose glyphs actually cover that script. A line that
-         * matches none of these falls back to the system face.
+         * The faces per handled script, in the order the song's hash cycles
+         * through them. A script listed with an empty list is handled but drawn
+         * with the system face (nothing bundled covers it). A script that is not
+         * mapped at all falls back to [FALLBACK].
          */
         private val FACES: Map<Script, List<Pair<FontDef, W>>> = mapOf(
-            Script.LATIN to listOf(
-                Fonts.INTER to W.SEMIBOLD,
-                Fonts.clock.first { it.id == "dm_serif" } to W.REGULAR,
-                Fonts.clock.first { it.id == "space" } to W.MEDIUM,
-            ),
             Script.ARABIC to listOf(
                 Fonts.PLEX to W.SEMIBOLD,
                 Fonts.uiAr.first { it.id == "readex" } to W.MEDIUM,
@@ -887,9 +876,14 @@ class CosmosLyricsView(ctx: Context) : View(ctx) {
                 Fonts.clock.first { it.id == "playfair" } to W.REGULAR,
                 Fonts.uiAr.first { it.id == "readex" } to W.MEDIUM,
             ),
-            Script.CJK to listOf(
-                Fonts.SYSTEM to W.REGULAR,
-            ),
+            Script.CJK to emptyList(),
+        )
+
+        /** Faces for scripts with no mapping: the original three-way pairing. */
+        private val FALLBACK: List<Pair<FontDef, W>> = listOf(
+            Fonts.INTER to W.SEMIBOLD,
+            Fonts.clock.first { it.id == "dm_serif" } to W.REGULAR,
+            Fonts.clock.first { it.id == "space" } to W.MEDIUM,
         )
 
         /** Render the background into a small GPU layer (see onDraw). Off until measured on the box. */
