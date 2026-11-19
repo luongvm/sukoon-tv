@@ -110,8 +110,9 @@ class NowPlayingCard(ctx: Context) : FrameLayout(ctx) {
         art.elevation = 10f.dp
         addView(art, frame(artSize, artSize, Gravity.START or Gravity.CENTER_VERTICAL).margins(start = 20.dp))
 
-        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        // Focus zoom on the full screen pill overflows the row, so don't clip it.
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
+        val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         val names = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         title.maxLines = 1
         title.ellipsize = TextUtils.TruncateAt.END
